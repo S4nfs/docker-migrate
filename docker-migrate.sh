@@ -27,12 +27,12 @@
 #  + We use the Ubuntu 18.04 Docker image with tar v1.29 that uses SEEK_DATA/SEEK_HOLE to manage sparse files.
 #
 
-if [[ $1 == "-v" || $1 == "--verbose" ]] ; then
+if [[ $1 == "-v" || $1 == "--verbose" ]]; then
     v="-v"
     shift
 fi
 
-if [[ $# -ne 3 ]] ; then
+if [[ $# -ne 3 ]]; then
     echo "Usage: $0 [-v|--verbose] CONTAINER USER HOST" >&2
     exit 1
 fi
@@ -51,8 +51,8 @@ migrate_container() {
     $DOCKER stop $CONTAINER
 
     # Create a new image
-    $DOCKER inspect "$CONTAINER" > "$LOCAL_TMP/$CONTAINER.info"
-    IMAGE_NAME=$($DOCKER run -i stedolan/jq < "$LOCAL_TMP/$CONTAINER.info" -r '.[0].Config.Image')
+    $DOCKER inspect "$CONTAINER" >"$LOCAL_TMP/$CONTAINER.info"
+    IMAGE_NAME=$($DOCKER run -i stedolan/jq -r '.[0].Config.Image' <"$LOCAL_TMP/$CONTAINER.info")
 
     echo "Creating image $IMAGE_NAME for container $CONTAINER"
     echo "$DOCKER commit $CONTAINER $IMAGE_NAME"
@@ -77,6 +77,10 @@ migrate_container() {
     scp $TAR_FILE_SRC $USER@$HOST:$TAR_FILE_DST
     scp $COMPOSE_FILE_SRC $USER@$HOST:$COMPOSE_FILE_DST
 
+    #
+    echo "Creating volumes if any"
+    create_volume_directory
+
     # Create container with the same options used in the previous container
     echo "Creating container on remote host"
     ssh $USER@$HOST "$DOCKER compose -f $COMPOSE_FILE_DST create"
@@ -92,16 +96,27 @@ migrate_container() {
     echo "$0 completed successfully"
 }
 
-save_container_options () {
-    $DOCKER run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/red5d/docker-autocompose "$CONTAINER" > "$COMPOSE_FILE_SRC"
+save_container_options() {
+    $DOCKER run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/red5d/docker-autocompose "$CONTAINER" >"$COMPOSE_FILE_SRC"
 }
 
-get_volumes () {
+get_volumes() {
     cat <($DOCKER inspect --type container -f '{{range .Mounts}}{{printf "%v\x00" .Destination}}{{end}}' "$CONTAINER" | head -c -1) | sort -uz
 }
 
-save_volumes () {
-    if [ -f "$TAR_FILE_SRC" ] ; then
+create_volume_directory() {
+    mount_volume=$(docker inspect --format="{{.Mounts}}" "$CONTAINER")
+    echo "$mount_volume | grep -q 'volume ' 2>/dev/null"
+
+    if [ "$?" -eq 0 ]; then
+        volume_data=$($mount_volume | sed 's/.*volume //' | cut -d " " -f 1)
+        echo "creating volume directory $volume_data"
+        ssh $USER@$HOST "$DOCKER volume create $volume_data"
+    fi
+}
+
+save_volumes() {
+    if [ -f "$TAR_FILE_SRC" ]; then
         echo "ERROR: $TAR_FILE_SRC already exists" >&2
         exit 1
     fi
@@ -112,7 +127,7 @@ save_volumes () {
     get_volumes | $DOCKER run --rm -i --volumes-from "$CONTAINER" -e LC_ALL=C.UTF-8 -v "$TAR_FILE_SRC:/${tmp_dir}/${TAR_FILE_SRC##*/}" $IMAGE tar -c -a $v --null -T- -f "/${tmp_dir}/${TAR_FILE_SRC##*/}"
 }
 
-load_volumes () {
+load_volumes() {
     tmp_dir=$(mktemp -du -p /)
     ssh $USER@$HOST "$DOCKER run --rm --volumes-from $CONTAINER -e LC_ALL=C.UTF-8 -v \"$TAR_FILE_DST:/${tmp_dir}/${TAR_FILE_DST##*/}\":ro $IMAGE tar -xp $v -S -f \"/${tmp_dir}/${TAR_FILE_DST##*/}\" -C / --overwrite"
 }

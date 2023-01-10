@@ -105,11 +105,8 @@ get_volumes() {
 }
 
 create_volume_directory() {
-    mount_volume=$(docker inspect --format="{{.Mounts}}" "$CONTAINER")
-    echo "$mount_volume | grep -q 'volume ' 2>/dev/null"
-
-    if [ "$?" -eq 0 ]; then
-        volume_data=$($mount_volume | sed 's/.*volume //' | cut -d " " -f 1)
+    if docker inspect --format="{{.Mounts}}" "$CONTAINER" | grep -q 'volume ' 2>/dev/null; then
+        volume_data=$(docker inspect --format="{{.Mounts}}" "$CONTAINER" | sed 's/.*volume //' | cut -d " " -f 1) 2>/dev/null
         echo "creating volume directory $volume_data"
         ssh $USER@$HOST "$DOCKER volume create $volume_data"
     fi
